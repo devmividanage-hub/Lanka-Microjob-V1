@@ -1,0 +1,299 @@
+pipeline {
+    agent any
+
+    tools {
+        maven 'maven3'
+        jdk 'jdk21'
+    }
+
+    environment {
+        GITHUB_REPO_URL = 'https://github.com/nisa2003-ops/Lanka-Microjob-Final.git'
+        GITHUB_BRANCH   = 'main'
+        GITHUB_CREDS_ID = 'github-pat'
+
+        SONARQUBE_SERVER = 'sonar'
+
+        REGISTRY = 'lanka-microjob'
+
+        SERVICES = 'user-service job-service matching-service broker-service notification-service api-gateway'
+    }
+
+    stages {
+
+        stage('Checkout Source Code') {
+            steps {
+                checkout([
+                    $class: 'GitSCM',
+                    branches: [[name: "refs/heads/${env.GITHUB_BRANCH}"]],
+                    userRemoteConfigs: [[
+                        credentialsId: env.GITHUB_CREDS_ID,
+                        url: env.GITHUB_REPO_URL
+                    ]]
+                ])
+            }
+        }
+
+        stage('Build Services') {
+            parallel {
+
+                stage('Build Backend') {
+                    steps {
+                        script {
+                            env.SERVICES.tokenize().each { service ->
+                                dir(service) {
+                                    bat 'mvn clean package'
+                                }
+                            }
+                        }
+                    }
+                }
+
+                stage('Build Frontend') {
+                    steps {
+                        dir('frontend') {
+                            bat 'npm ci'
+                            bat 'npm run build'
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('SonarQube Analysis') {
+            steps {
+                script {
+                    withSonarQubeEnv(env.SONARQUBE_SERVER) {
+
+                        env.SERVICES.tokenize().each { service ->
+
+                            dir(service) {
+
+                                bat """
+                                    mvn org.sonarsource.scanner.maven:sonar-maven-plugin:sonar ^
+                                    -Dsonar.projectKey=lanka-microjob-${service}
+                                """
+
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Build Docker Images') {
+            steps {
+                script {
+
+                    def images =
+                        env.SERVICES.tokenize() + ['frontend']
+
+                    images.each { image ->
+
+                        bat """
+                            docker build ^
+                            -t ${env.REGISTRY}/${image}:latest ^
+                            ./${image}
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Push Docker Images') {
+            steps {
+
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'dockerhub-new',
+                        usernameVariable: 'DOCKER_USERNAME',
+                        passwordVariable: 'DOCKER_PASSWORD'
+                    )
+                ]) {
+
+                    bat '''
+                        @echo off
+                        echo %DOCKER_PASSWORD%| docker login ^
+                        -u %DOCKER_USERNAME% ^
+                        --password-stdin
+                    '''
+
+                    script {
+
+                        def images =
+                            env.SERVICES.tokenize() + ['frontend']
+
+                        images.each { image ->
+
+                            bat """
+                                docker tag ^
+                                ${env.REGISTRY}/${image}:latest ^
+                                %DOCKER_USERNAME%/lanka-microjob-${image}:latest
+
+                                docker push ^
+                                %DOCKER_USERNAME%/lanka-microjob-${image}:latest
+                            """
+                        }
+                    }
+
+                    bat 'docker logout'
+                }
+            }
+        }
+
+        stage('Deploy to Kubernetes') {
+            steps {
+
+                bat '''
+                    @echo off
+
+                    echo ===== Checking Kubernetes =====
+
+                    kubectl config use-context docker-desktop
+
+                    kubectl get nodes
+
+                    echo ===== Deploying configuration =====
+
+                    kubectl apply -f k8s/configmap.yaml
+                    kubectl apply -f k8s/secret.yaml
+
+                    echo ===== Deploying PostgreSQL =====
+
+                    kubectl apply -f k8s/postgres-deployment.yaml
+
+                    echo ===== Deploying Microservices =====
+
+                    kubectl apply -f k8s/user-service-deployment.yaml
+                    kubectl apply -f k8s/job-service-deployment.yaml
+                    kubectl apply -f k8s/matching-service-deployment.yaml
+                    kubectl apply -f k8s/notification-service-deployment.yaml
+                    kubectl apply -f k8s/broker-service-deployment.yaml
+
+                    echo ===== Deploying Gateway =====
+
+                    kubectl apply -f k8s/api-gateway-deployment.yaml
+
+                    echo ===== Deploying Frontend =====
+
+                    kubectl apply -f k8s/frontend-deployment.yaml
+                '''
+            }
+        }
+
+        stage('Restart Kubernetes Deployments') {
+            steps {
+
+                bat '''
+                    @echo off
+
+                    kubectl rollout restart deployment/user-service
+
+                    kubectl rollout restart deployment/job-service
+
+                    kubectl rollout restart deployment/matching-service
+
+                    kubectl rollout restart deployment/broker-service
+
+                    kubectl rollout restart deployment/notification-service
+
+                    kubectl rollout restart deployment/api-gateway
+
+                    kubectl rollout restart deployment/frontend
+                '''
+            }
+        }
+
+        stage('Verify Kubernetes Deployment') {
+            steps {
+
+                bat '''
+                    @echo off
+
+                    echo ===== Waiting for PostgreSQL =====
+
+                    kubectl rollout status ^
+                    deployment/postgres ^
+                    --timeout=180s
+
+                    echo ===== Waiting for User Service =====
+
+                    kubectl rollout status ^
+                    deployment/user-service ^
+                    --timeout=300s
+
+                    echo ===== Waiting for Job Service =====
+
+                    kubectl rollout status ^
+                    deployment/job-service ^
+                    --timeout=300s
+
+                    echo ===== Waiting for Matching Service =====
+
+                    kubectl rollout status ^
+                    deployment/matching-service ^
+                    --timeout=300s
+
+                    echo ===== Waiting for Broker Service =====
+
+                    kubectl rollout status ^
+                    deployment/broker-service ^
+                    --timeout=300s
+
+                    echo ===== Waiting for Notification Service =====
+
+                    kubectl rollout status ^
+                    deployment/notification-service ^
+                    --timeout=300s
+
+                    echo ===== Waiting for API Gateway =====
+
+                    kubectl rollout status ^
+                    deployment/api-gateway ^
+                    --timeout=300s
+
+                    echo ===== Waiting for Frontend =====
+
+                    kubectl rollout status ^
+                    deployment/frontend ^
+                    --timeout=180s
+
+                    echo.
+                    echo ===== PODS =====
+
+                    kubectl get pods -o wide
+
+                    echo.
+                    echo ===== SERVICES =====
+
+                    kubectl get services
+                '''
+            }
+        }
+    }
+
+    post {
+
+        success {
+            echo 'CI/CD completed successfully.'
+
+            echo 'Frontend: http://localhost:30300'
+
+            echo 'API Gateway: http://localhost:30900'
+        }
+
+        failure {
+            echo 'Pipeline failed.'
+
+            bat '''
+                @echo off
+
+                echo ===== Kubernetes Pods =====
+                kubectl get pods
+
+                echo ===== Recent Kubernetes Events =====
+                kubectl get events ^
+                --sort-by=.lastTimestamp
+            '''
+        }
+    }
+}

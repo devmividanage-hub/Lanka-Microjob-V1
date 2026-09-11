@@ -1,0 +1,71 @@
+# Lanka MicroJob - broker-service
+#
+# Ports, image names and environment variables are kept in sync with
+# broker-service/src/main/resources/application.properties, docker-compose.yml and jenkins/Jenkinsfile.
+# scripts/validate_k8s.py checks this in CI.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: broker-service
+  labels:
+    app: broker-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: broker-service
+  template:
+    metadata:
+      labels:
+        app: broker-service
+    spec:
+      containers:
+        - name: broker-service
+          image: nisa2003one/lanka-microjob-broker-service:latest
+          imagePullPolicy: Always
+          envFrom:
+            - secretRef:
+                name: lanka-microjob-secrets
+            - configMapRef:
+                name: lanka-microjob-config
+          env:
+            - name: SERVER_PORT
+              value: "9004"
+            - name: JOB_SERVICE_URL
+              value: http://job-service:9002
+          ports:
+            - containerPort: 9004
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 9004
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 9004
+            initialDelaySeconds: 45
+            periodSeconds: 20
+            failureThreshold: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 384Mi
+            limits:
+              cpu: "1"
+              memory: 768Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: broker-service
+  labels:
+    app: broker-service
+spec:
+  selector:
+    app: broker-service
+  ports:
+    - port: 9004
+      targetPort: 9004

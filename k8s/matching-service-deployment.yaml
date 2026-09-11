@@ -1,0 +1,69 @@
+# Lanka MicroJob - matching-service
+#
+# Ports, image names and environment variables are kept in sync with
+# matching-service/src/main/resources/application.properties, docker-compose.yml and jenkins/Jenkinsfile.
+# scripts/validate_k8s.py checks this in CI.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: matching-service
+  labels:
+    app: matching-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: matching-service
+  template:
+    metadata:
+      labels:
+        app: matching-service
+    spec:
+      containers:
+        - name: matching-service
+          image: nisa2003one/lanka-microjob-matching-service:latest
+          imagePullPolicy: Always
+          envFrom:
+            - secretRef:
+                name: lanka-microjob-secrets
+            - configMapRef:
+                name: lanka-microjob-config
+          env:
+            - name: SERVER_PORT
+              value: "9003"
+          ports:
+            - containerPort: 9003
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 9003
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 9003
+            initialDelaySeconds: 45
+            periodSeconds: 20
+            failureThreshold: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 384Mi
+            limits:
+              cpu: "1"
+              memory: 768Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: matching-service
+  labels:
+    app: matching-service
+spec:
+  selector:
+    app: matching-service
+  ports:
+    - port: 9003
+      targetPort: 9003

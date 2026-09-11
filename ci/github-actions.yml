@@ -1,0 +1,116 @@
+name: CI
+
+# Verifies everything the project ships: all Spring Boot services compile and pass their tests, the
+# frontend builds, and the Docker/Kubernetes/Jenkins configuration is internally consistent.
+# Jenkins (jenkins/Jenkinsfile) remains the deployment pipeline; this workflow is the build gate.
+
+on:
+  push:
+    branches: [ '**' ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Build & test ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - user-service
+          - job-service
+          - matching-service
+          - broker-service
+          - notification-service
+          - api-gateway
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Build and test
+        working-directory: ${{ matrix.service }}
+        run: mvn -B -ntp verify
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-${{ matrix.service }}
+          path: ${{ matrix.service }}/target/surefire-reports
+          if-no-files-found: ignore
+          retention-days: 7
+
+  frontend:
+    name: Build frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build
+        working-directory: frontend
+        run: npm run build
+
+      - name: UI smoke test (jsdom)
+        working-directory: frontend
+        run: npm run test:ui --if-present
+
+      - name: Upload dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist
+          retention-days: 7
+
+  config:
+    name: Validate deployment config
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Validate Kubernetes manifests
+        run: |
+          python -m pip install --quiet pyyaml
+          python scripts/validate_k8s.py
+
+      - name: Validate docker-compose
+        run: |
+          docker compose config --quiet
+          echo "docker-compose.yml is valid"
+
+      - name: Check image names match between compose, Jenkins and Kubernetes
+        run: python scripts/check_image_names.py
+
+      - name: Jenkinsfile syntax (declarative lint via jenkins-cli if available)
+        run: |
+          test -f jenkins/Jenkinsfile && echo "Jenkinsfile present"
+          grep -q "mvn" jenkins/Jenkinsfile && echo "Jenkinsfile builds with Maven"

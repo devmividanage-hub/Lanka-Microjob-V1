@@ -1,0 +1,181 @@
+name: lanka-microjob
+
+x-java-healthcheck: &java-healthcheck
+  # The JRE images ship no curl/wget, so probe the listening port through bash's /dev/tcp.
+  interval: 10s
+  timeout: 5s
+  retries: 12
+  start_period: 60s
+
+x-db-env: &db-env
+  SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-lanka_microjob}
+  SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-lanka}
+  SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
+
+x-security-env: &security-env
+  JWT_SECRET: ${JWT_SECRET}
+  JWT_EXPIRATION: ${JWT_EXPIRATION:-86400000}
+  INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN}
+  CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:5173,http://127.0.0.1:3000}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-lanka_microjob}
+      POSTGRES_USER: ${POSTGRES_USER:-lanka}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-lanka} -d ${POSTGRES_DB:-lanka_microjob}" ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  user-service:
+    build: ./user-service
+    image: lanka-microjob/user-service:latest
+    environment:
+      <<: [ *db-env, *security-env ]
+      SERVER_PORT: "9001"
+      NOTIFICATION_SERVICE_URL: http://notification-service:9005
+      NOTIFICATION_CLIENT_ENABLED: ${NOTIFICATION_CLIENT_ENABLED:-true}
+      ADMIN_DEFAULT_EMAIL: ${ADMIN_DEFAULT_EMAIL:-admin@gmail.com}
+      ADMIN_DEFAULT_PASSWORD: ${ADMIN_DEFAULT_PASSWORD:-admin123}
+      SEED_DEMO_DATA: ${SEED_DEMO_DATA}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      notification-service:
+        condition: service_started
+    ports:
+      - "9001:9001"
+    healthcheck:
+      test: [ "CMD-SHELL", "wget -q --spider http://127.0.0.1:9001/actuator/health || exit 1" ]
+      <<: *java-healthcheck
+
+  job-service:
+    build: ./job-service
+    image: lanka-microjob/job-service:latest
+    environment:
+      <<: [ *db-env, *security-env ]
+      SERVER_PORT: "9002"
+      NOTIFICATION_SERVICE_URL: http://notification-service:9005
+      NOTIFICATION_CLIENT_ENABLED: ${NOTIFICATION_CLIENT_ENABLED:-true}
+      BROKER_COMMISSION_RATE: ${BROKER_COMMISSION_RATE:-0.075}
+      SEED_DEMO_DATA: ${SEED_DEMO_DATA}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      notification-service:
+        condition: service_started
+    ports:
+      - "9002:9002"
+    healthcheck:
+        test: [ "CMD-SHELL", "wget -q --spider http://127.0.0.1:9002/actuator/health || exit 1" ]
+        <<: *java-healthcheck
+
+  matching-service:
+    build: ./matching-service
+    image: lanka-microjob/matching-service:latest
+    environment:
+      <<: [ *db-env, *security-env ]
+      SERVER_PORT: "9003"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "9003:9003"
+    healthcheck:
+      test: [ "CMD-SHELL", "wget -q --spider http://127.0.0.1:9003/actuator/health || exit 1" ]
+      <<: *java-healthcheck
+
+  broker-service:
+    build: ./broker-service
+    image: lanka-microjob/broker-service:latest
+    environment:
+      <<: [ *db-env, *security-env ]
+      SERVER_PORT: "9004"
+      NOTIFICATION_SERVICE_URL: http://notification-service:9005
+      NOTIFICATION_CLIENT_ENABLED: ${NOTIFICATION_CLIENT_ENABLED:-true}
+      JOB_SERVICE_URL: http://job-service:9002
+      ADMIN_CONTACT_EMAIL: ${ADMIN_DEFAULT_EMAIL:-admin@gmail.com}
+      BROKER_COMMISSION_RATE: ${BROKER_COMMISSION_RATE:-0.075}
+      SEED_DEMO_DATA: ${SEED_DEMO_DATA}
+      SEED_DEMO_BROKER_EMAIL: ${SEED_DEMO_BROKER_EMAIL:-demo.broker@lanka.lk}
+      SEED_DEMO_BROKER_PASSWORD: ${SEED_DEMO_BROKER_PASSWORD:-demo1234}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      notification-service:
+        condition: service_started
+      job-service:
+        condition: service_healthy
+    ports:
+      - "9004:9004"
+    healthcheck:
+      test: [ "CMD-SHELL", "wget -q --spider http://127.0.0.1:9004/actuator/health || exit 1" ]
+      <<: *java-healthcheck
+
+  notification-service:
+    build: ./notification-service
+    image: lanka-microjob/notification-service:latest
+    environment:
+      <<: [ *db-env, *security-env ]
+      SERVER_PORT: "9005"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "9005:9005"
+    healthcheck:
+      test: [ "CMD-SHELL", "wget -q --spider http://127.0.0.1:9005/actuator/health || exit 1" ]
+      <<: *java-healthcheck
+
+  api-gateway:
+    build: ./api-gateway
+    image: lanka-microjob/api-gateway:latest
+    environment:
+      <<: *security-env
+      SERVER_PORT: "9000"
+      USER_SERVICE_URL: http://user-service:9001
+      JOB_SERVICE_URL: http://job-service:9002
+      MATCHING_SERVICE_URL: http://matching-service:9003
+      BROKER_SERVICE_URL: http://broker-service:9004
+      NOTIFICATION_SERVICE_URL: http://notification-service:9005
+    depends_on:
+      user-service:
+        condition: service_healthy
+      job-service:
+        condition: service_healthy
+      matching-service:
+        condition: service_healthy
+      broker-service:
+        condition: service_healthy
+      notification-service:
+        condition: service_healthy
+    ports:
+      - "9010:9000"
+    healthcheck:
+      test: [ "CMD-SHELL", "wget -q --spider http://127.0.0.1:9000/actuator/health || exit 1" ]
+      <<: *java-healthcheck
+  frontend:
+    build: ./frontend
+    image: lanka-microjob/frontend:latest
+    depends_on:
+      api-gateway:
+        condition: service_healthy
+    ports:
+      - "${FRONTEND_PORT:-3000}:80"
+    healthcheck:
+      test: [ "CMD-SHELL", "wget -q --spider http://127.0.0.1/ || exit 1" ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  postgres-data:

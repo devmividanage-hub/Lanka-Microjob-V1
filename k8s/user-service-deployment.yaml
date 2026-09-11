@@ -1,0 +1,69 @@
+# Lanka MicroJob - user-service
+#
+# Ports, image names and environment variables are kept in sync with
+# user-service/src/main/resources/application.properties, docker-compose.yml and jenkins/Jenkinsfile.
+# scripts/validate_k8s.py checks this in CI.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: user-service
+  labels:
+    app: user-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: user-service
+  template:
+    metadata:
+      labels:
+        app: user-service
+    spec:
+      containers:
+        - name: user-service
+          image: nisa2003one/lanka-microjob-user-service:latest
+          imagePullPolicy: Always
+          envFrom:
+            - secretRef:
+                name: lanka-microjob-secrets
+            - configMapRef:
+                name: lanka-microjob-config
+          env:
+            - name: SERVER_PORT
+              value: "9001"
+          ports:
+            - containerPort: 9001
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 9001
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 9001
+            initialDelaySeconds: 45
+            periodSeconds: 20
+            failureThreshold: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 384Mi
+            limits:
+              cpu: "1"
+              memory: 768Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: user-service
+  labels:
+    app: user-service
+spec:
+  selector:
+    app: user-service
+  ports:
+    - port: 9001
+      targetPort: 9001

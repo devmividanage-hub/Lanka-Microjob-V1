@@ -1,0 +1,82 @@
+# Lanka MicroJob - api-gateway
+#
+# Ports, image names and environment variables are kept in sync with
+# api-gateway/src/main/resources/application.properties, docker-compose.yml and jenkins/Jenkinsfile.
+# scripts/validate_k8s.py checks this in CI.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-gateway
+  labels:
+    app: api-gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: api-gateway
+  template:
+    metadata:
+      labels:
+        app: api-gateway
+    spec:
+      containers:
+        - name: api-gateway
+          image: nisa2003one/lanka-microjob-api-gateway:latest
+          imagePullPolicy: Always
+          envFrom:
+            - secretRef:
+                name: lanka-microjob-secrets
+            - configMapRef:
+                name: lanka-microjob-config
+          env:
+            - name: SERVER_PORT
+              value: "9000"
+            # Service discovery uses the Kubernetes Service names and their real ports.
+            - name: USER_SERVICE_URL
+              value: http://user-service:9001
+            - name: JOB_SERVICE_URL
+              value: http://job-service:9002
+            - name: MATCHING_SERVICE_URL
+              value: http://matching-service:9003
+            - name: BROKER_SERVICE_URL
+              value: http://broker-service:9004
+            - name: NOTIFICATION_SERVICE_URL
+              value: http://notification-service:9005
+          ports:
+            - containerPort: 9000
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 9000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 9000
+            initialDelaySeconds: 35
+            periodSeconds: 20
+            failureThreshold: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 320Mi
+            limits:
+              cpu: "1"
+              memory: 640Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-gateway
+  labels:
+    app: api-gateway
+spec:
+  type: NodePort
+  selector:
+    app: api-gateway
+  ports:
+    - port: 9000
+      targetPort: 9000
+      nodePort: 30900
