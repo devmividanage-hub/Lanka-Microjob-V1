@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Lanka MicroJob
 
 A district-aware micro job marketplace for Sri Lanka's informal labour market, built as a Spring Boot
@@ -170,3 +171,6 @@ python3 scripts/check_image_names.py  # compose == Jenkins == Kubernetes image n
 Deliberately **out of scope** for a university project: payments/escrow, real SMS or email delivery,
 machine learning, Kafka or Redis, a database per service, and a complex event-driven architecture.
 See `docs/API.md` § "Design notes" for the reasoning.
+=======
+# Lanka-Microjob-V1
+>>>>>>> e7d426ecf5f38c695e327fbbf033c7eaaa25ba41
