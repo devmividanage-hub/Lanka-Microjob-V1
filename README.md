@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # Lanka MicroJob
 
 A district-aware micro job marketplace for Sri Lanka's informal labour market, built as a Spring Boot
