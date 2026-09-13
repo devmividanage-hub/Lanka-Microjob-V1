@@ -7,10 +7,10 @@
 - `user-service` issues an HS256 JWT on login with claims `uid`, `name`, `role` and (for workers) a
   `skills` snapshot. `broker-service` issues its own tokens for approved brokers with `role=BROKER` plus
   `brokerId` and `district`.
-- All services verify the token with the **same** `JWT_SECRET` from the environment. There is no default
-  secret in committed configuration: without `JWT_SECRET` the services fail to start rather than silently
-  falling back to a known key.
-- Token lifetime is `JWT_EXPIRATION_MINUTES` (default 480). The frontend stores the token in
+- Services that accept JWTs verify them with the **same** `JWT_SECRET`. Their committed properties include
+  a development-only fallback value, so deployments must override it with a strong secret.
+- Token lifetime is `JWT_EXPIRATION` in milliseconds (default `86400000`, or 24 hours). The Kubernetes
+  ConfigMap sets it to `28800000` (8 hours). The frontend stores the token in
   `localStorage`, shows the remaining time, and clears the session on the first 401.
 - Sessions are stateless: no server-side session, `SessionCreationPolicy.STATELESS` everywhere.
 
@@ -42,39 +42,40 @@ Every resource that belongs to a user is resolved from the token, never trusted 
 
 Violations return **403** with a message the UI can display, not a silent 404.
 
-## Vulnerabilities found in the prototype and fixed
+## Security controls and demo tradeoffs
 
 | # | Issue | Fix |
 |---|-------|-----|
 | S1 | `POST /auth/register` overwrote the password of an **existing approved** account (account takeover) | Registration now rejects a known email/mobile with 409 and never mutates an existing row |
 | S2 | Admin seeder re-hashed and reset `admin123` on **every boot** | Admin is created only when absent; credentials come from `ADMIN_DEFAULT_*` |
-| S3 | Hardcoded `jwt.secret` in every `application.properties` | `${JWT_SECRET}` with no committed default |
-| S4 | Hardcoded DB credentials (`lanka/lanka`) in committed config | `${SPRING_DATASOURCE_*}` / `${POSTGRES_*}`; Kubernetes uses a Secret |
+| S3 | Shared JWT signing | Services read `${JWT_SECRET}`, with a documented development fallback that must be overridden outside a demo |
+| S4 | Database credentials | Services read `${SPRING_DATASOURCE_*}`; Compose and Kubernetes supply environment values, while local properties retain development defaults |
 | S5 | `broker-service` was fully `permitAll`, and login returned **no token** | JWT issued on login; every mutating endpoint requires `BROKER` or `ADMIN` |
 | S6 | `notification-service` accepted writes from anyone | Requires `ROLE_SYSTEM` (internal token) or `ADMIN`; reads limited to self/admin |
 | S7 | Broker reference `BRK-%04d` derived from `count()+1` → collisions after deletions | Allocation loop that skips existing references, inside the approval transaction |
 | S8 | `job-service` had no role restrictions and no employer ownership on jobs | `SecurityConfig` roles + ownership checks in `JobService`/`ApplicationService` |
 | S9 | `ddl-auto=update` on a shared production-like database | Kept `update` for the demo but documented; manifests pin one schema owner and seeders are gated |
-| S10 | CORS `allowedOriginPatterns=*` with credentials | Origins come from `APP_CORS_ALLOWED_ORIGINS`; `*` is documented as dev-only |
-| S11 | No error contract — stack traces and Spring's default whitelabel leaked internals | `ApiError` + `@RestControllerAdvice` in every service; `server.error.include-*` set to `never` |
+| S10 | CORS with credentials | Origins come from `CORS_ALLOWED_ORIGINS`; `*` is supported for development but should not be used in deployment |
+| S11 | Application error handling | Domain services use `ApiError` and `@RestControllerAdvice`; security-filter responses use a smaller JSON error body |
 | S12 | Stored XSS: server text was injected with `innerHTML` in the frontend | All rendered values pass through `esc()` in `frontend/src/utils/dom.js` |
 
 ## Input validation
 
 Every request body is a `record` DTO annotated with `@NotBlank`, `@Size`, `@Email`, `@Pattern`, `@Min`,
 `@Positive` and `@Valid`-ated at the controller. Examples: mobile must match a Sri Lankan pattern, pay per
-worker must be positive, `workersNeeded` must be ≥ 1, job date must not be in the past, broker NIC must be
-12 characters. Validation failures return 400 with a `fieldErrors` map the UI prints next to the field.
+worker must be positive, `workersNeeded` must be ≥ 1, job date must not be in the past, and broker NIC must
+match either the 9-digit-plus-letter or 12-digit Sri Lankan format. Validation failures return 400 with a
+`fieldErrors` map the UI prints next to the field.
 
 ## Secrets management
 
 - `.env` is git-ignored; `.env.example` documents every variable with placeholder values only.
-- `docker-compose.yml` injects secrets through a shared `x-security-env` anchor — no secret is written in
-  the Compose file.
-- `k8s/secret.yaml` is the only place Kubernetes reads secrets from (`envFrom.secretRef`); the manifests
-  contain no literal credentials.
-- Jenkins reads registry credentials from the Jenkins credential store
-  (`DOCKER_REGISTRY_CREDENTIALS_ID`), never from the repository.
+- `docker-compose.yml` injects shared security values through the `x-security-env` anchor. Some service
+  properties still contain development fallback values.
+- Kubernetes workloads read secrets through `envFrom.secretRef`. The checked-in `k8s/secret.yaml` contains
+  demonstration values only and must be replaced before a real deployment.
+- Jenkins reads registry credentials from the Jenkins credential store using the configured
+  `dockerhub-new` credential ID, rather than from the repository.
 
 ## Known limitations (accepted for a university project)
 
@@ -85,7 +86,8 @@ worker must be positive, `workersNeeded` must be ≥ 1, job date must not be in 
 
 ## Simulated notifications — what is and is not claimed
 
-`notification-service` defines a `NotificationProvider` interface with two implementations,
+`notification-service` defines a `NotificationProvider` interface with two included implementations,
+`EmailNotificationProvider` and `SmsNotificationProvider`. They identify themselves in API responses as
 `SimulatedEmailProvider` and `SimulatedSmsProvider`. They:
 
 1. validate the channel and recipient,

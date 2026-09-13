@@ -1,9 +1,10 @@
 # API reference
 
-Base URL in development: `http://localhost:9000` (the gateway). In Docker/Kubernetes the frontend nginx
-proxies the same paths, so browser code uses relative URLs.
+Base URL when running the gateway directly: `http://localhost:9000`. Docker Compose publishes the
+gateway on `http://localhost:9010`, and Kubernetes exposes it on NodePort 30900. In the deployed frontend,
+nginx proxies API paths to the gateway, so browser code uses relative URLs.
 
-All error responses share one shape:
+Application-level errors generally use this shape:
 
 ```json
 { "timestamp": "2026-09-09T10:12:00", "status": 409, "error": "Conflict",
@@ -11,7 +12,9 @@ All error responses share one shape:
   "fieldErrors": { } }
 ```
 
-`fieldErrors` is populated only for bean-validation failures (400).
+`fieldErrors` is populated only for bean-validation failures (400). Authentication and authorization
+errors written directly by Spring Security contain `timestamp`, `status`, `error`, and `message`, but do
+not include `path` or `fieldErrors`.
 
 Authentication is a JWT in `Authorization: Bearer <token>`. Claims: `uid`, `name`, `role`
 (`ADMIN|EMPLOYER|WORKER|BROKER`) and, for workers, a `skills` snapshot. Broker tokens add `brokerId` and
@@ -28,10 +31,11 @@ Authentication is a JWT in `Authorization: Bearer <token>`. Claims: `uid`, `name
 | POST | `/auth/admin/login` | public | Admin login against the `admins` table |
 | GET | `/auth/me` | authenticated | Current profile from the token — used by the UI to refresh approval status |
 | GET | `/auth/users/pending` | ADMIN | Approval queue |
-| GET | `/auth/users` | ADMIN | All users, optional `?role=`/`?district=` |
+| GET | `/auth/users` | ADMIN | All users, optionally filtered by `?role=` and/or `?status=` |
 | PUT | `/auth/users/{id}/approve` | ADMIN | Sets `APPROVED` |
 | PUT | `/auth/users/{id}/reject` | ADMIN | Sets `REJECTED` |
 | GET | `/auth/stats` | ADMIN | Counts by role and status for the admin dashboard |
+| GET | `/auth/public-stats` | public | Approved-worker count for the landing page |
 
 ## job-service — `/jobs` (port 9002)
 
@@ -44,6 +48,9 @@ Authentication is a JWT in `Authorization: Bearer <token>`. Claims: `uid`, `name
 | GET | `/jobs/employer/{id}` | EMPLOYER (owner) or ADMIN | Ownership-checked |
 | GET | `/jobs/stats` | authenticated | Platform counts used by dashboards |
 | GET | `/jobs/admin` | ADMIN | Complete job directory, including closed/expired/flagged jobs and `applicationCount`; used so admin KPI and detail counts match |
+| GET | `/jobs/public-stats` | public | Public job counters for the landing page |
+| GET | `/jobs/placements/mine` | EMPLOYER or ADMIN | Broker placements on jobs visible to the caller |
+| PUT | `/jobs/placements/{placementId}/rating` | owning EMPLOYER or ADMIN | Rates a broker placement from 1 to 5 |
 | PUT | `/jobs/{id}/status` | EMPLOYER (owner) or ADMIN | `?status=ASSIGNED|IN_PROGRESS|COMPLETED|CANCELLED`. Illegal transitions → 409 |
 | PUT | `/jobs/{id}/flag` | ADMIN | Moderation: hides the job from the feed |
 
@@ -99,9 +106,13 @@ neutral 50.
 | PUT | `/brokers/{id}/reject` | ADMIN | |
 | GET | `/brokers/stats` | ADMIN | Totals + per-district breakdown |
 | GET | `/brokers/workers` | ADMIN | Complete offline-worker directory for admin details |
+| GET | `/brokers/placements` | ADMIN | Complete broker-placement directory |
+| GET | `/brokers/public-stats` | public | Approved-broker and offline-worker counts |
 | GET | `/brokers/{brokerId}/dashboard` | that broker or ADMIN | Real counters + the broker's offline workers |
 | GET | `/brokers/{brokerId}/workers` | that broker or ADMIN | Current offline workers managed by this broker |
-| POST | `/brokers/{brokerId}/workers` | that broker | Registers an offline worker, **city-locked** to the broker's district |
+| GET | `/brokers/{brokerId}/placements` | that broker or ADMIN | Placement history for the broker |
+| GET | `/brokers/{brokerId}/workers/{workerId}/eligible-jobs` | that broker or ADMIN | Open jobs for an owned active worker |
+| POST | `/brokers/{brokerId}/workers` | that broker | Registers an offline worker; district and city come from the broker record |
 | PUT | `/brokers/{brokerId}/workers/{workerId}/status` | that broker | `ACTIVE|ON_JOB|INACTIVE` |
 | POST | `/brokers/{brokerId}/workers/{workerId}/placements` | that broker | Records a placement; commission = `round(payPerDay × 0.075)` |
 
@@ -129,7 +140,7 @@ this honestly instead of implying real delivery.
 Routes: `/auth/**` → user-service, `/jobs/**` and `/applications/**` → job-service, `/matches/**` →
 matching-service, `/brokers/**` → broker-service, `/notifications/**` → notification-service,
 `/api-docs/{service}` → that service's `/v3/api-docs`. Duplicate CORS headers are removed with
-`DedupeResponseHeader`, and allowed origins come from `APP_CORS_ALLOWED_ORIGINS`.
+`DedupeResponseHeader`, and allowed origins come from `CORS_ALLOWED_ORIGINS`.
 
 `GET /` returns a small JSON document describing the routes (useful during a demo).
 
@@ -137,8 +148,9 @@ matching-service, `/brokers/**` → broker-service, `/notifications/**` → noti
 
 ## Design notes
 
-- **One shared database.** Six services sharing `lanka_microjob` is a deliberate simplification for a
-  university project; each service still owns its own tables and never queries another service's tables.
+- **One shared database.** The five domain services sharing `lanka_microjob` is a deliberate
+  simplification for a university project; each service still owns its own tables and never queries
+  another service's tables. The API gateway does not use the database.
 - **Synchronous notifications.** `job-service` calls `notification-service` directly with a short timeout
   and tolerates failure (an acceptance still succeeds if notifications are down). No broker/queue needed at
   this scale.

@@ -1,32 +1,33 @@
-# Continuous integration
+# Continuous Integration
 
-`github-actions.yml` is a complete, ready-to-use GitHub Actions workflow. It is stored here rather than in
-`.github/workflows/` for one reason only: the automation token used to open this change is not permitted to
-create or modify files under `.github/workflows/`, so the push would be rejected.
+The repository includes `ci/github-actions.yml` as a workflow template. It is stored outside
+`.github/workflows`, so GitHub does not run it automatically.
 
-## Enable it
+## Current Workflow Contents
+
+| Job | Current steps |
+| --- | --- |
+| `backend` | Runs `mvn -B -ntp verify` for each of the six Java services and uploads Surefire reports |
+| `frontend` | Runs `npm ci`, `npm run build`, and the optional `test:ui` script if it exists |
+| `config` | Validates Docker Compose and attempts to run two Python configuration checks |
+
+The referenced files `scripts/validate_k8s.py` and `scripts/check_image_names.py` are not present in this
+repository. Consequently, the `config` job cannot currently pass as written. This documentation does not
+claim those checks are available, and no replacement production or infrastructure scripts have been
+added as part of the documentation/test work.
+
+## Enabling the Workflow
+
+After either adding the missing validation scripts or removing those two steps from the workflow, copy
+the template into GitHub's workflow directory:
 
 ```bash
 mkdir -p .github/workflows
 cp ci/github-actions.yml .github/workflows/ci.yml
 git add .github/workflows/ci.yml
-git commit -m "ci: enable the GitHub Actions workflow"
+git commit -m "ci: enable GitHub Actions"
 git push
 ```
 
-Anyone with write access to the repository (or a token holding the `workflows` permission) can do this in
-one commit; no content change is required.
-
-## What it runs
-
-| Job | Steps |
-|-----|-------|
-| `backend` | Matrix over the six Java services: `mvn -B verify` (compiles, runs the unit and MockMvc tests), then publishes the JUnit/Surefire reports |
-| `frontend` | `npm ci`, `npm run build`, and a syntax check over every ES module in `frontend/src` |
-| `config` | `python3 scripts/validate_k8s.py`, `python3 scripts/check_image_names.py` and `docker compose config` — the same three checks the Jenkins `config-validation` stage runs |
-
-The `config` job is the one worth keeping even if you drop the rest: it is what prevents the port, image
-name and environment variable drift that this project originally suffered from.
-
-Jenkins remains the deployment pipeline (see `jenkins/Jenkinsfile`); this workflow is the fast feedback
-loop on every push and pull request.
+The Jenkins pipeline in `jenkins/Jenkinsfile` remains a separate Windows-oriented build, analysis,
+image-publishing, and Kubernetes deployment pipeline.

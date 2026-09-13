@@ -13,8 +13,9 @@ its log (`docker compose logs job-service`).
 
 ## Login says "pending approval"
 
-By design: registration creates a `PENDING` account and login is refused until an admin approves it.
-Either approve it in the Admin panel, or use the seeded demo accounts (`SEED_DEMO_DATA=true`).
+By design: worker and employer registration creates a `PENDING` account and login is refused until an
+admin approves it. Approve it in the Admin panel. `SEED_DEMO_DATA=true` seeds jobs and a broker with two
+offline workers, but it does not seed worker or employer login accounts.
 
 ## 401 on every authenticated call
 
@@ -26,7 +27,8 @@ docker compose exec job-service printenv JWT_SECRET
 docker compose exec user-service printenv JWT_SECRET   # must be identical
 ```
 
-Tokens also expire after `JWT_EXPIRATION_MINUTES` (default 480) — log in again.
+Tokens also expire after `JWT_EXPIRATION` milliseconds (default `86400000`, or 24 hours; the Kubernetes
+ConfigMap sets `28800000`, or 8 hours) — log in again.
 
 ## 403 when accepting an application / managing a worker
 
@@ -68,7 +70,7 @@ changed the gateway port, update `server.proxy` there.
 
 ## CORS errors in the browser console
 
-Set `APP_CORS_ALLOWED_ORIGINS` to the exact origin the browser uses (scheme + host + port), e.g.
+Set `CORS_ALLOWED_ORIGINS` to the exact origin the browser uses (scheme + host + port), e.g.
 `http://localhost:5173`. With the nginx deployment no CORS header is needed at all because the origin is
 the same.
 
@@ -99,11 +101,11 @@ created before `kubectl apply -f k8s/`.
 
 ## Jenkins image does not appear in the cluster
 
-Run the consistency checker — it compares Compose, Jenkinsfile and manifest image names:
+The repository has no image-name consistency script. Compare the Jenkins push tag with the exact image
+in the relevant Kubernetes manifest. The manifests use
+`nisa2003one/lanka-microjob-<component>:latest`, while Jenkins uses the Docker Hub username supplied by
+its `dockerhub-new` credential.
 
-```bash
-python3 scripts/check_image_names.py
-```
-
-Also confirm `imagePullPolicy: IfNotPresent` and that the node actually has the image
-(`docker images | grep lanka-microjob`), or that `PUSH_IMAGES=true` pushed it to a registry the node can pull from.
+Application deployments use `imagePullPolicy: Always`. Confirm that Jenkins pushed to the account named
+in the manifest and that the cluster can access the repository. If another Docker Hub account is used,
+update the manifest image names before deployment.
